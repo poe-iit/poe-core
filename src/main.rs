@@ -71,15 +71,15 @@ impl<M: std::marker::Sync + std::marker::Send + Serialize + DeserializeOwned + s
 
 
     pub async fn start(&mut self) {
-        let mut heartbeat = time::interval(Duration::from_millis(50));
+        let mut heartbeat = time::interval(Duration::from_millis(100));
 
-        loop {
+        for i in 0.. {
             tokio::select! {
                 _ = heartbeat.tick() => {
                     self.broadcast(Payload::Heartbeat).await;
                 },
                 (packet, peer) = self.recv_packet() => {
-                    println!("from {}: {:?}", peer, packet);
+                    println!("{} from {}: {:?}", i, peer, packet);
                 }
             }
         }
