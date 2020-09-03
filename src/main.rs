@@ -72,7 +72,7 @@ async fn main()  {
     let mut node = PioNode::new(port).await;
 
 
-    let peer_strings = matches.value_of("peers").unwrap().split(',').collect::<Vec<&str>>();
+    let peer_strings = matches.value_of("peers").unwrap().split(',');
 
     for s in peer_strings {
         let addr: net::SocketAddr = s.parse().unwrap();
