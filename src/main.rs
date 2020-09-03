@@ -67,7 +67,7 @@ impl<M: SaneMessage> Node<M> {
         }
     }
 
-    pub async fn start(mut self) -> RunningNode<M> {
+    pub fn start(mut self) -> RunningNode<M> {
         let (tx, mut metarx) = mpsc::channel::<MetaCommand<M>>(100);
 
         let handle = tokio::spawn(async move {
@@ -176,7 +176,7 @@ async fn main() {
         node.add_peer(addr);
     }
 
-    let node = node.start().await;
+    let node = node.start();
 
     // TODO: actually do something
 
