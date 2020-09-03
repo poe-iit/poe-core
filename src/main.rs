@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use serde::{Serialize, Deserialize, de::DeserializeOwned};
 use tokio::time;
 use std::time::Duration;
+use std::sync::{ Mutex};
 
 
 
@@ -37,7 +38,7 @@ struct Node<M> {
     phantom: std::marker::PhantomData<M>,
 }
 
-impl<M: Serialize + DeserializeOwned> Node<M> {
+impl<M: std::marker::Sync + std::marker::Send + Serialize + DeserializeOwned + std::fmt::Debug> Node<M> {
     pub async fn new(port: u16) -> Self {
         println!("Listening at 127.0.0.1:{}", port);
         let sock = UdpSocket::bind((net::Ipv4Addr::new(127, 0, 0, 1), port)).await.unwrap();
@@ -48,37 +49,47 @@ impl<M: Serialize + DeserializeOwned> Node<M> {
     }
 
 
-    pub async fn start(&mut self) {
-
-
-        // start the heartbeat
-        let mut interval = time::interval(Duration::from_millis(500));
+    pub async fn recv_packet(&mut self) -> (Packet<M>, net::SocketAddr) {
         loop {
-            self.broadcast(Payload::Heartbeat).await;
-            interval.tick().await;
-        }
-        /*
-        let mut buf = [0u8; 0xFFFF]; // maximum udp dgram size
-
-        loop {
+            let mut buf = [0u8; 0xFFFF]; // maximum udp dgram size
             let (len, peer) = self.sock.recv_from(&mut buf).await.unwrap();
             if !self.peers.contains(&peer) {
                 println!("Not in the peer set!\n");
                 continue;
             }
 
-            println!("you are in the peer set!\n");
-            dbg!(len, &buf[0..len], peer);
-
+            match bincode::deserialize(&buf[0..len]) {
+                Ok(pkt) => {
+                    return (pkt, peer);
+                }
+                Err(_) => {
+                    continue;
+                }
+            }
         }
-            */
+    }
+
+
+    pub async fn start(&mut self) {
+        let mut heartbeat = time::interval(Duration::from_millis(50));
+
+        loop {
+            tokio::select! {
+                _ = heartbeat.tick() => {
+                    self.broadcast(Payload::Heartbeat).await;
+                },
+                (packet, peer) = self.recv_packet() => {
+                    println!("from {}: {:?}", peer, packet);
+                }
+            }
+        }
+
     }
 
     /// Send a msg to each node in the peer set
     pub async fn broadcast(&mut self, payload: Payload<M>) {
         let pkt = Packet(Operation::Broadcast(self.peers.clone()), payload);
         let encoded = bincode::serialize(&pkt).unwrap();
-
         // TODO: do this all async like ;^}
         for peer in &self.peers {
             self.sock.send_to(&encoded, peer).await.unwrap();
