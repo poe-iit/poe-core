@@ -1,5 +1,5 @@
 [package]
-name = "poe_aio"
+name = "poe_core"
 version = "0.1.0"
 authors = ["Nick Wanninger <nickwanninger@gmail.com>"]
 edition = "2018"
