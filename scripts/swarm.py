@@ -2,32 +2,31 @@
 
 import subprocess
 import os
-
-# an array of valid ports
-ports = []
-for i in range(0, 10):
-    ports.append(8000 + i)
+import atexit
+import networkx as nx
 
 
-pairs = []
-for port in ports:
-    peers = []
-    for peer in ports:
-        if peer == port:
-            continue
-        peers.append(peer)
-    pairs.append((port, peers))
-
+G = nx.ladder_graph(2)
 
 procs = []
-try:
-    for pair in pairs:
-        peers = ','.join(map(lambda port: '127.0.0.1:{}'.format(port), pair[1]))
-        p = subprocess.Popen(['sh', '-c', 'target/debug/poe_core --port {} --peers {}'.format(pair[0], peers)])
-        procs.append(p)
+for node, adj in G.adjacency():
+    port = 7000 + node
+    peers = ','.join(map(lambda port: '127.0.0.1:{}'.format(7000 + port), adj))
+    if node == 0:
+        peers += ',127.0.0.1:6999'
+    print(port, peers)
+    p = subprocess.Popen(['sh', '-c', 'target/debug/poe_core --port {} --peers {}'.format(port, peers)])
+    procs.append(p)
+
+
+@atexit.register
+def cleanup():
+    print("Cleanup started!")
     for p in procs:
-        # p.join()
-        pass
-except KeyboardInterrupt:
-    for proc in procs:
-        proc.terminate()
+        p.terminate()
+        p.wait()
+    print("Cleanup done!")
+
+
+for p in procs:
+    p.wait()

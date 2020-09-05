@@ -1,14 +1,19 @@
 #![feature(trait_alias)]
 
-use std::net;
-use tokio::net::UdpSocket;
 extern crate clap;
-use clap::{App, Arg};
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashSet;
+use std::io::Write;
+use std::net;
 use std::time::Duration;
+use tokio;
+use tokio::io::AsyncBufReadExt;
+use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time;
+
+mod cli;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Operation {
@@ -28,6 +33,7 @@ struct Packet<T>(Operation, Payload<T>);
 struct Node<M> {
     sock: UdpSocket,
     peers: HashSet<net::SocketAddr>,
+    port: u16,
 
     phantom: std::marker::PhantomData<M>,
 }
@@ -43,6 +49,7 @@ impl<M: SaneMessage> Node<M> {
         Self {
             sock,
             peers: Default::default(),
+            port,
             phantom: std::marker::PhantomData,
         }
     }
@@ -68,10 +75,13 @@ impl<M: SaneMessage> Node<M> {
     }
 
     pub fn start(mut self) -> RunningNode<M> {
-        let (tx, mut metarx) = mpsc::channel::<MetaCommand<M>>(100);
+        let (metatx, mut metarx) = mpsc::channel::<MetaCommand<M>>(100);
 
         let handle = tokio::spawn(async move {
-            let mut heartbeat = time::interval(Duration::from_millis(100));
+            // send a heartbeat every second
+            let mut heartbeat = time::interval(Duration::from_millis(1000));
+            let my_addr =
+                net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), self.port);
 
             let mut active = true;
             while active {
@@ -79,8 +89,39 @@ impl<M: SaneMessage> Node<M> {
                     _ = heartbeat.tick() => {
                         self.broadcast(Payload::Heartbeat).await;
                     },
-                    (packet, peer) = self.recv_packet() => {
-                        println!("msg from {}: {:?}", peer, packet);
+                    (packet, _peer) = self.recv_packet() => {
+
+                        // switch over the payload data
+                        match packet.1 {
+                            Payload::Heartbeat => {
+                            },
+                            Payload::Message(m) => {
+                                // what kind of message operation was it?
+                                match packet.0 {
+                                    Operation::Broadcast(mut seen) => {
+                                        // if I have already seen this message, skip it
+                                        if seen.contains(&my_addr) {
+                                            continue;
+                                        }
+                                        println!("[{}] got msg '{:?}'", self.port, m);
+                                        // insert myself into the
+                                        seen.insert(my_addr.clone());
+                                        let pkt = Packet(Operation::Broadcast(seen.clone()), Payload::Message(m));
+                                        let encoded = bincode::serialize(&pkt).unwrap();
+                                        for peer in &self.peers {
+                                            if seen.contains(peer) {
+                                                continue;
+                                            }
+                                            self.sock.send_to(&encoded, peer).await.unwrap();
+                                        }
+                                    },
+                                    Operation::Targetted(_) => {
+                                        println!("Targetted message!");
+                                    }
+                                }
+                            },
+                        }
+
                     },
                     meta = metarx.recv() => {
 
@@ -90,7 +131,8 @@ impl<M: SaneMessage> Node<M> {
                                 println!("Node Terminating");
                             },
                             MetaCommand::Broadcast(msg) => {
-                                println!("Told to broadcast '{:?}'", msg);
+                                // println!("Told to broadcast '{:?}'", msg);
+                                self.broadcast(Payload::Message(msg)).await;
                             }
                         }
                     },
@@ -98,12 +140,17 @@ impl<M: SaneMessage> Node<M> {
             }
         });
 
-        return RunningNode { handle, tx };
+        return RunningNode { handle, tx: metatx };
     }
 
     /// Send a msg to each node in the peer set
     pub async fn broadcast(&mut self, payload: Payload<M>) {
-        let pkt = Packet(Operation::Broadcast(self.peers.clone()), payload);
+        let mut have_seen = HashSet::<net::SocketAddr>::new();
+        have_seen.insert(net::SocketAddr::new(
+            net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)),
+            self.port,
+        ));
+        let pkt = Packet(Operation::Broadcast(have_seen), payload);
         let encoded = bincode::serialize(&pkt).unwrap();
         // TODO: do this all async like ;^}
         for peer in &self.peers {
@@ -135,31 +182,15 @@ impl<M: SaneMessage> RunningNode<M> {
         let _ = self.tx.send(MetaCommand::<M>::Die).await;
         self.wait().await;
     }
+
+    pub async fn broadcast(&mut self, msg: M) {
+        let _ = self.tx.send(MetaCommand::<M>::Broadcast(msg)).await;
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    let matches = App::new("Power over Ethernet Node")
-        .version("1.0")
-        .author("Just a bunch of dumbies")
-        .about("Mesh communication and packet bouncing")
-        .arg(
-            Arg::with_name("port")
-                .short("p")
-                .long("port")
-                .help("Sets a port to listen from")
-                .required(true)
-                .takes_value(true),
-        )
-        .arg(
-            Arg::with_name("peers")
-                .short("c")
-                .long("peers")
-                .help("A CSV list of topologically adjacent servers")
-                .required(true)
-                .takes_value(true),
-        )
-        .get_matches();
+    let matches = cli::build_cli().get_matches();
 
     let port = matches
         .value_of("port")
@@ -176,9 +207,40 @@ async fn main() {
         node.add_peer(addr);
     }
 
-    let node = node.start();
+    let mut node = node.start();
 
-    // TODO: actually do something
+    // run the interactive shell if we need to
 
-    node.terminate().await;
+    if matches.is_present("shell") {
+        let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
+        loop {
+            print!(">>> ");
+            std::io::stdout().flush().unwrap(); // ugh
+            let mut buffer = String::new();
+            if let Ok(_) = reader.read_line(&mut buffer).await {
+                let line = buffer.trim();
+                let parts = line.split_ascii_whitespace().collect::<Vec<&str>>();
+                if parts.len() == 0 {
+                    continue;
+                }
+
+                match parts[0] {
+                    "exit" => {
+                        break;
+                    }
+                    "b" => {
+                        let msg = parts[1..].join(" ");
+                        node.broadcast(msg).await;
+                    }
+                    _ => println!("Unknown '{}'", line),
+                };
+            } else {
+                break;
+            }
+        }
+        node.terminate().await;
+    } else {
+        // otherwise wait for the node to finish
+        node.wait().await;
+    }
 }
