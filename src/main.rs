@@ -1,7 +1,10 @@
 #![feature(trait_alias)]
 
 extern crate clap;
+extern crate lru;
+mod cli;
 
+use lru::LruCache;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashSet;
 use std::io::Write;
@@ -12,8 +15,7 @@ use tokio::io::AsyncBufReadExt;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time;
-
-mod cli;
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 enum Operation {
@@ -28,7 +30,21 @@ enum Payload<T> {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct Packet<T>(Operation, Payload<T>);
+struct Packet<T> {
+    id: Uuid,
+    op: Operation,
+    payload: Payload<T>,
+}
+
+impl<T> Packet<T> {
+    pub fn new(op: Operation, payload: Payload<T>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            op,
+            payload,
+        }
+    }
+}
 
 struct Node<M> {
     sock: UdpSocket,
@@ -78,6 +94,9 @@ impl<M: SaneMessage> Node<M> {
         let (metatx, mut metarx) = mpsc::channel::<MetaCommand<M>>(100);
 
         let handle = tokio::spawn(async move {
+            // 100 messages
+            let mut seen_msg_ids = LruCache::<Uuid, ()>::new(100);
+
             // send a heartbeat every second
             let mut heartbeat = time::interval(Duration::from_millis(1000));
             let my_addr =
@@ -91,22 +110,31 @@ impl<M: SaneMessage> Node<M> {
                     },
                     (packet, _peer) = self.recv_packet() => {
 
+                        if seen_msg_ids.contains(&packet.id) {
+                            continue;
+                        }
+                        seen_msg_ids.put(packet.id, ());
+
                         // switch over the payload data
-                        match packet.1 {
+                        match packet.payload {
                             Payload::Heartbeat => {
                             },
                             Payload::Message(m) => {
                                 // what kind of message operation was it?
-                                match packet.0 {
+                                match packet.op {
                                     Operation::Broadcast(mut seen) => {
                                         // if I have already seen this message, skip it
                                         if seen.contains(&my_addr) {
                                             continue;
                                         }
-                                        println!("[{}] got msg '{:?}'", self.port, m);
+                                        println!("[{}] got msg {} '{:?}'", self.port, packet.id, m);
                                         // insert myself into the
                                         seen.insert(my_addr.clone());
-                                        let pkt = Packet(Operation::Broadcast(seen.clone()), Payload::Message(m));
+                                        let pkt = Packet {
+                                            id: packet.id,
+                                            op: Operation::Broadcast(seen.clone()),
+                                            payload: Payload::Message(m)
+                                        };
                                         let encoded = bincode::serialize(&pkt).unwrap();
                                         for peer in &self.peers {
                                             if seen.contains(peer) {
@@ -150,7 +178,7 @@ impl<M: SaneMessage> Node<M> {
             net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)),
             self.port,
         ));
-        let pkt = Packet(Operation::Broadcast(have_seen), payload);
+        let pkt = Packet::new(Operation::Broadcast(have_seen), payload);
         let encoded = bincode::serialize(&pkt).unwrap();
         // TODO: do this all async like ;^}
         for peer in &self.peers {
