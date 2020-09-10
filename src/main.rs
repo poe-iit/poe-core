@@ -2,11 +2,12 @@
 
 extern crate clap;
 extern crate lru;
+
 mod cli;
 
 use lru::LruCache;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::net;
 use std::time::Duration;
@@ -46,9 +47,17 @@ impl<T> Packet<T> {
     }
 }
 
+struct Peer {}
+
+impl Peer {
+    pub fn new(_addr: net::SocketAddr) -> Self {
+        Peer {}
+    }
+}
+
 struct Node<M> {
     sock: UdpSocket,
-    peers: HashSet<net::SocketAddr>,
+    peers: HashMap<net::SocketAddr, Peer>,
     port: u16,
 
     phantom: std::marker::PhantomData<M>,
@@ -74,7 +83,7 @@ impl<M: SaneMessage> Node<M> {
         loop {
             let mut buf = [0u8; 0xFFFF]; // maximum udp dgram size
             let (len, peer) = self.sock.recv_from(&mut buf).await.unwrap();
-            if !self.peers.contains(&peer) {
+            if !self.peers.contains_key(&peer) {
                 println!("Not in the peer set!\n");
                 continue;
             }
@@ -136,7 +145,7 @@ impl<M: SaneMessage> Node<M> {
                                             payload: Payload::Message(m)
                                         };
                                         let encoded = bincode::serialize(&pkt).unwrap();
-                                        for peer in &self.peers {
+                                        for peer in self.peers.keys() {
                                             if seen.contains(peer) {
                                                 continue;
                                             }
@@ -180,14 +189,15 @@ impl<M: SaneMessage> Node<M> {
         ));
         let pkt = Packet::new(Operation::Broadcast(have_seen), payload);
         let encoded = bincode::serialize(&pkt).unwrap();
+
         // TODO: do this all async like ;^}
-        for peer in &self.peers {
+        for peer in self.peers.keys() {
             self.sock.send_to(&encoded, peer).await.unwrap();
         }
     }
 
     pub fn add_peer(&mut self, peer: net::SocketAddr) {
-        self.peers.insert(peer);
+        self.peers.insert(peer, Peer::new(peer));
     }
 }
 
