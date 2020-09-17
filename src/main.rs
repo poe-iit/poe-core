@@ -4,9 +4,10 @@ extern crate clap;
 extern crate lru;
 
 mod cli;
+mod peer;
+mod proto;
 
 use lru::LruCache;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::net;
@@ -17,35 +18,6 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time;
 use uuid::Uuid;
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-enum Operation {
-    Broadcast(/* blacklist */ HashSet<net::SocketAddr>),
-    Targetted(/* Target */ net::SocketAddr),
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-enum Payload<T> {
-    Heartbeat,
-    Message(T),
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct Packet<T> {
-    id: Uuid,
-    op: Operation,
-    payload: Payload<T>,
-}
-
-impl<T> Packet<T> {
-    pub fn new(op: Operation, payload: Payload<T>) -> Self {
-        Self {
-            id: Uuid::new_v4(),
-            op,
-            payload,
-        }
-    }
-}
 
 struct Peer {}
 
@@ -63,9 +35,7 @@ struct Node<M> {
     phantom: std::marker::PhantomData<M>,
 }
 
-trait SaneMessage = Send + Sync + Serialize + DeserializeOwned + std::fmt::Debug + 'static;
-
-impl<M: SaneMessage> Node<M> {
+impl<M: proto::SaneMessage> Node<M> {
     pub async fn new(port: u16) -> Self {
         println!("Listening at 127.0.0.1:{}", port);
         let sock = UdpSocket::bind((net::Ipv4Addr::new(127, 0, 0, 1), port))
@@ -79,7 +49,7 @@ impl<M: SaneMessage> Node<M> {
         }
     }
 
-    pub async fn recv_packet(&mut self) -> (Packet<M>, net::SocketAddr) {
+    pub async fn recv_packet(&mut self) -> (proto::Packet<M>, net::SocketAddr) {
         loop {
             let mut buf = [0u8; 0xFFFF]; // maximum udp dgram size
             let (len, peer) = self.sock.recv_from(&mut buf).await.unwrap();
@@ -115,7 +85,7 @@ impl<M: SaneMessage> Node<M> {
             while active {
                 tokio::select! {
                     _ = heartbeat.tick() => {
-                        self.broadcast(Payload::Heartbeat).await;
+                        self.broadcast(proto::Payload::Heartbeat).await;
                     },
                     (packet, _peer) = self.recv_packet() => {
 
@@ -126,23 +96,23 @@ impl<M: SaneMessage> Node<M> {
 
                         // switch over the payload data
                         match packet.payload {
-                            Payload::Heartbeat => {
+                            proto::Payload::Heartbeat => {
                             },
-                            Payload::Message(m) => {
+                            proto::Payload::Message(m) => {
                                 // what kind of message operation was it?
                                 match packet.op {
-                                    Operation::Broadcast(mut seen) => {
+                                    proto::Operation::Broadcast(mut seen, hops) => {
                                         // if I have already seen this message, skip it
                                         if seen.contains(&my_addr) {
                                             continue;
                                         }
-                                        println!("[{}] got msg {} '{:?}'", self.port, packet.id, m);
+                                        println!("[{}] got msg {} '{:?}' {} hops", self.port, packet.id, m, hops);
                                         // insert myself into the
                                         seen.insert(my_addr.clone());
-                                        let pkt = Packet {
+                                        let pkt = proto::Packet {
                                             id: packet.id,
-                                            op: Operation::Broadcast(seen.clone()),
-                                            payload: Payload::Message(m)
+                                            op: proto::Operation::Broadcast(seen.clone(), hops + 1),
+                                            payload: proto::Payload::Message(m)
                                         };
                                         let encoded = bincode::serialize(&pkt).unwrap();
                                         for peer in self.peers.keys() {
@@ -152,7 +122,7 @@ impl<M: SaneMessage> Node<M> {
                                             self.sock.send_to(&encoded, peer).await.unwrap();
                                         }
                                     },
-                                    Operation::Targetted(_) => {
+                                    proto::Operation::Targetted(_) => {
                                         println!("Targetted message!");
                                     }
                                 }
@@ -169,7 +139,7 @@ impl<M: SaneMessage> Node<M> {
                             },
                             MetaCommand::Broadcast(msg) => {
                                 // println!("Told to broadcast '{:?}'", msg);
-                                self.broadcast(Payload::Message(msg)).await;
+                                self.broadcast(proto::Payload::Message(msg)).await;
                             }
                         }
                     },
@@ -181,13 +151,13 @@ impl<M: SaneMessage> Node<M> {
     }
 
     /// Send a msg to each node in the peer set
-    pub async fn broadcast(&mut self, payload: Payload<M>) {
+    pub async fn broadcast(&mut self, payload: proto::Payload<M>) {
         let mut have_seen = HashSet::<net::SocketAddr>::new();
         have_seen.insert(net::SocketAddr::new(
             net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)),
             self.port,
         ));
-        let pkt = Packet::new(Operation::Broadcast(have_seen), payload);
+        let pkt = proto::Packet::new(proto::Operation::Broadcast(have_seen, 0), payload);
         let encoded = bincode::serialize(&pkt).unwrap();
 
         // TODO: do this all async like ;^}
@@ -211,7 +181,7 @@ struct RunningNode<M> {
     tx: mpsc::Sender<MetaCommand<M>>,
 }
 
-impl<M: SaneMessage> RunningNode<M> {
+impl<M: proto::SaneMessage> RunningNode<M> {
     pub async fn wait(self) {
         self.handle.await.unwrap();
     }

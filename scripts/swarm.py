@@ -6,7 +6,7 @@ import atexit
 import networkx as nx
 
 
-G = nx.ladder_graph(2)
+G = nx.ladder_graph(10)
 
 procs = []
 for node, adj in G.adjacency():

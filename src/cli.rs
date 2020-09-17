@@ -1,4 +1,4 @@
-use clap::{App, Arg, SubCommand};
+use clap::{App, Arg};
 
 pub fn build_cli() -> App<'static, 'static> {
     App::new("Power over Ethernet Node")
