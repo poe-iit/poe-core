@@ -1,36 +1,35 @@
-use crate::proto;
+use std::marker::PhantomData;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+};
 
-use tokio::io::AsyncWriteExt;
-
-/// A Peer is a connection to another node in the network. It is
-/// able to send and recv packets asynchronously and all that cool jazz
-pub struct Peer<T> {
-    stream: tokio::net::TcpStream,
-
-    phantom: std::marker::PhantomData<T>,
+pub struct Peer<M> {
+    stream: TcpStream,
+    phantom: PhantomData<M>,
 }
 
-impl<T: proto::SaneMessage> Peer<T> {
-    /// Open a tcp connection and return a peer if it connected.
-    pub async fn connect(ip: std::net::SocketAddr) -> Option<Self> {
-        return match tokio::net::TcpStream::connect(&ip).await {
-            Err(_) => None,
-            Ok(c) => Some(Self::create(c)),
-        };
-    }
-
-    /// Create a peer connection from a tcp connection
-    pub fn create(stream: tokio::net::TcpStream) -> Self {
+impl<M: super::proto::SaneMessage> Peer<M> {
+    pub fn new(stream: TcpStream) -> Self {
         Self {
             stream,
-            phantom: std::marker::PhantomData,
+            phantom: PhantomData,
         }
     }
 
-    /// encode and send a packet over the peer, returning if it succeeded or not
-    pub async fn send_packet(&mut self, payload: proto::Payload<T>) -> bool {
-        let encoded = bincode::serialize(&payload).unwrap();
-        let res = self.stream.write(&encoded).await;
-        return res.is_ok();
+    pub async fn recv_packet(&mut self) -> tokio::io::Result<M> {
+        let msg_len = self.stream.read_u64().await?;
+        let mut buf = vec![0u8; msg_len as usize];
+        self.stream.read_exact(&mut buf[..]).await?;
+        let pkt = bincode::deserialize(&buf[..]).expect("TODO: handle invalid packet data");
+        Ok(pkt)
+    }
+
+    pub async fn send_packet(&mut self, packet: M) -> tokio::io::Result<()> {
+        let buf = bincode::serialize(&packet).expect("TODO: handle serialization failures");
+        self.stream.write_u64(buf.len() as u64).await?;
+        self.stream.write_all(&buf[..]).await?;
+        self.stream.flush().await?;
+        Ok(())
     }
 }

@@ -1,8 +1,5 @@
 #![feature(trait_alias)]
 
-extern crate clap;
-extern crate lru;
-
 mod cli;
 mod peer;
 mod proto;
@@ -10,45 +7,41 @@ mod proto;
 use lru::LruCache;
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
+use std::marker::PhantomData;
 use std::net;
 use std::time::Duration;
 use tokio;
 use tokio::io::AsyncBufReadExt;
-use tokio::net::UdpSocket;
+use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::time;
 use uuid::Uuid;
 
-struct Peer {}
-
-impl Peer {
-    pub fn new(_addr: net::SocketAddr) -> Self {
-        Peer {}
-    }
-}
-
 struct Node<M> {
-    sock: UdpSocket,
-    peers: HashMap<net::SocketAddr, Peer>,
+    listener: TcpListener,
+    peers: HashMap<net::SocketAddr, peer::Peer<M>>,
+    known_peers: HashSet<net::SocketAddr>,
     port: u16,
 
-    phantom: std::marker::PhantomData<M>,
+    phantom: PhantomData<M>,
 }
 
 impl<M: proto::SaneMessage> Node<M> {
     pub async fn new(port: u16) -> Self {
         println!("Listening at 127.0.0.1:{}", port);
-        let sock = UdpSocket::bind((net::Ipv4Addr::new(127, 0, 0, 1), port))
+        let listener = TcpListener::bind((net::Ipv4Addr::new(127, 0, 0, 1), port))
             .await
             .unwrap();
         Self {
-            sock,
+            listener,
             peers: Default::default(),
+            known_peers: Default::default(),
             port,
-            phantom: std::marker::PhantomData,
+            phantom: PhantomData,
         }
     }
 
+    /*
     pub async fn recv_packet(&mut self) -> (proto::Packet<M>, net::SocketAddr) {
         loop {
             let mut buf = [0u8; 0xFFFF]; // maximum udp dgram size
@@ -68,6 +61,7 @@ impl<M: proto::SaneMessage> Node<M> {
             }
         }
     }
+    */
 
     pub fn start(mut self) -> RunningNode<M> {
         let (metatx, mut metarx) = mpsc::channel::<MetaCommand<M>>(100);
@@ -83,10 +77,22 @@ impl<M: proto::SaneMessage> Node<M> {
 
             let mut active = true;
             while active {
+                let mut recvs = self
+                    .peers
+                    .values_mut()
+                    .map(peer::Peer::recv_packet)
+                    .collect::<Vec<_>>();
+                let mut incoming_packet = futures::future::select_all(recvs);
                 tokio::select! {
                     _ = heartbeat.tick() => {
                         self.broadcast(proto::Payload::Heartbeat).await;
                     },
+                    Ok((stream, addr)) = self.listener.accept() => {
+                        if self.known_peers.contains(&addr) {
+                            self.peers.insert(addr, peer::Peer::new(stream));
+                        }
+                    }
+                    /*
                     (packet, _peer) = self.recv_packet() => {
 
                         if seen_msg_ids.contains(&packet.id) {
@@ -130,6 +136,7 @@ impl<M: proto::SaneMessage> Node<M> {
                         }
 
                     },
+                    */
                     meta = metarx.recv() => {
 
                         match meta.unwrap() {
@@ -161,13 +168,11 @@ impl<M: proto::SaneMessage> Node<M> {
         let encoded = bincode::serialize(&pkt).unwrap();
 
         // TODO: do this all async like ;^}
+        /*
         for peer in self.peers.keys() {
             self.sock.send_to(&encoded, peer).await.unwrap();
         }
-    }
-
-    pub fn add_peer(&mut self, peer: net::SocketAddr) {
-        self.peers.insert(peer, Peer::new(peer));
+        */
     }
 }
 
@@ -212,7 +217,7 @@ async fn main() {
 
     for s in peer_strings {
         let addr: net::SocketAddr = s.parse().unwrap();
-        node.add_peer(addr);
+        node.known_peers.insert(addr);
     }
 
     let mut node = node.start();
