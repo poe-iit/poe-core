@@ -3,9 +3,9 @@
 mod cli;
 mod peer;
 mod proto;
-
 use lru::LruCache;
 use std::collections::{HashMap, HashSet};
+use std::io;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::net;
@@ -26,7 +26,7 @@ struct Node<M> {
     phantom: PhantomData<M>,
 }
 
-impl<M: proto::SaneMessage> Node<M> {
+impl<M: proto::SanePayload> Node<M> {
     pub async fn new(port: u16) -> Self {
         println!("Listening at 127.0.0.1:{}", port);
         let listener = TcpListener::bind((net::Ipv4Addr::new(127, 0, 0, 1), port))
@@ -63,6 +63,14 @@ impl<M: proto::SaneMessage> Node<M> {
     }
     */
 
+    async fn recv_from_socket(
+        addr: net::SocketAddr,
+        peer: &peer::Peer<M>,
+    ) -> io::Result<(net::SocketAddr, proto::Payload<M>)> {
+        let msg = peer.recv_packet().await?;
+        Ok((addr, msg))
+    }
+
     pub fn start(mut self) -> RunningNode<M> {
         let (metatx, mut metarx) = mpsc::channel::<MetaCommand<M>>(100);
 
@@ -77,79 +85,90 @@ impl<M: proto::SaneMessage> Node<M> {
 
             let mut active = true;
             while active {
-                let mut recvs = self
-                    .peers
-                    .values_mut()
-                    .map(peer::Peer::recv_packet)
-                    .collect::<Vec<_>>();
-                let mut incoming_packet = futures::future::select_all(recvs);
-                tokio::select! {
-                    _ = heartbeat.tick() => {
-                        self.broadcast(proto::Payload::Heartbeat).await;
-                    },
-                    Ok((stream, addr)) = self.listener.accept() => {
-                        if self.known_peers.contains(&addr) {
-                            self.peers.insert(addr, peer::Peer::new(stream));
-                        }
-                    }
-                    /*
-                    (packet, _peer) = self.recv_packet() => {
+                let mut new_peers = Vec::<(net::SocketAddr, peer::Peer<M>)>::new();
 
-                        if seen_msg_ids.contains(&packet.id) {
-                            continue;
-                        }
-                        seen_msg_ids.put(packet.id, ());
+                {
+                    let mut recvs = self
+                        .peers
+                        .iter()
+                        .map(|(addr, peer)| Box::pin(Self::recv_from_socket(addr.clone(), peer)))
+                        .collect::<Vec<_>>();
 
-                        // switch over the payload data
-                        match packet.payload {
-                            proto::Payload::Heartbeat => {
-                            },
-                            proto::Payload::Message(m) => {
-                                // what kind of message operation was it?
-                                match packet.op {
-                                    proto::Operation::Broadcast(mut seen, hops) => {
-                                        // if I have already seen this message, skip it
-                                        if seen.contains(&my_addr) {
-                                            continue;
-                                        }
-                                        println!("[{}] got msg {} '{:?}' {} hops", self.port, packet.id, m, hops);
-                                        // insert myself into the
-                                        seen.insert(my_addr.clone());
-                                        let pkt = proto::Packet {
-                                            id: packet.id,
-                                            op: proto::Operation::Broadcast(seen.clone(), hops + 1),
-                                            payload: proto::Payload::Message(m)
-                                        };
-                                        let encoded = bincode::serialize(&pkt).unwrap();
-                                        for peer in self.peers.keys() {
-                                            if seen.contains(peer) {
-                                                continue;
-                                            }
-                                            self.sock.send_to(&encoded, peer).await.unwrap();
-                                        }
-                                    },
-                                    proto::Operation::Targetted(_) => {
-                                        println!("Targetted message!");
-                                    }
-                                }
-                            },
-                        }
-
-                    },
-                    */
-                    meta = metarx.recv() => {
-
-                        match meta.unwrap() {
-                            MetaCommand::Die => {
-                                active = false;
-                                println!("Node Terminating");
-                            },
-                            MetaCommand::Broadcast(msg) => {
-                                // println!("Told to broadcast '{:?}'", msg);
-                                self.broadcast(proto::Payload::Message(msg)).await;
+                    tokio::select! {
+                        _ = heartbeat.tick() => {
+                            self.broadcast(proto::Payload::Heartbeat).await;
+                        },
+                        Ok((stream, addr)) = self.listener.accept() => {
+                            if self.known_peers.contains(&addr) {
+                                new_peers.push((addr, peer::Peer::new(stream)));
                             }
                         }
-                    },
+
+                        (Ok((addr, payload)), _, _) = futures::future::select_all(recvs) => {
+
+                        }
+                        /*
+                        (packet, _peer) = self.recv_packet() => {
+
+                            if seen_msg_ids.contains(&packet.id) {
+                                continue;
+                            }
+                            seen_msg_ids.put(packet.id, ());
+
+                            // switch over the payload data
+                            match packet.payload {
+                                proto::Payload::Heartbeat => {
+                                },
+                                proto::Payload::Message(m) => {
+                                    // what kind of message operation was it?
+                                    match packet.op {
+                                        proto::Operation::Broadcast(mut seen, hops) => {
+                                            // if I have already seen this message, skip it
+                                            if seen.contains(&my_addr) {
+                                                continue;
+                                            }
+                                            println!("[{}] got msg {} '{:?}' {} hops", self.port, packet.id, m, hops);
+                                            // insert myself into the
+                                            seen.insert(my_addr.clone());
+                                            let pkt = proto::Packet {
+                                                id: packet.id,
+                                                op: proto::Operation::Broadcast(seen.clone(), hops + 1),
+                                                payload: proto::Payload::Message(m)
+                                            };
+                                            let encoded = bincode::serialize(&pkt).unwrap();
+                                            for peer in self.peers.keys() {
+                                                if seen.contains(peer) {
+                                                    continue;
+                                                }
+                                                self.sock.send_to(&encoded, peer).await.unwrap();
+                                            }
+                                        },
+                                        proto::Operation::Targetted(_) => {
+                                            println!("Targetted message!");
+                                        }
+                                    }
+                                },
+                            }
+
+                        },
+                        */
+                        meta = metarx.recv() => {
+
+                            match meta.unwrap() {
+                                MetaCommand::Die => {
+                                    active = false;
+                                    println!("Node Terminating");
+                                },
+                                MetaCommand::Broadcast(msg) => {
+                                    // println!("Told to broadcast '{:?}'", msg);
+                                    self.broadcast(proto::Payload::Message(msg)).await;
+                                }
+                            }
+                        },
+                    }
+                }
+                for (addr, peer) in new_peers {
+                    self.peers.insert(addr, peer);
                 }
             }
         });
@@ -157,22 +176,17 @@ impl<M: proto::SaneMessage> Node<M> {
         return RunningNode { handle, tx: metatx };
     }
 
-    /// Send a msg to each node in the peer set
-    pub async fn broadcast(&mut self, payload: proto::Payload<M>) {
-        let mut have_seen = HashSet::<net::SocketAddr>::new();
-        have_seen.insert(net::SocketAddr::new(
-            net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)),
-            self.port,
-        ));
-        let pkt = proto::Packet::new(proto::Operation::Broadcast(have_seen, 0), payload);
-        let encoded = bincode::serialize(&pkt).unwrap();
+    /// Send a msg to each node in the peer set and returns a set of
+    pub async fn broadcast(&self, payload: proto::Payload<M>) -> Vec<(net::SocketAddr, io::Error)> {
+        let mut errs = vec![];
 
-        // TODO: do this all async like ;^}
-        /*
-        for peer in self.peers.keys() {
-            self.sock.send_to(&encoded, peer).await.unwrap();
+        for (addr, peer) in &self.peers {
+            if let Err(e) = peer.send_packet(&payload).await {
+                errs.push((addr.clone(), e));
+            }
         }
-        */
+
+        return errs;
     }
 }
 
@@ -186,7 +200,7 @@ struct RunningNode<M> {
     tx: mpsc::Sender<MetaCommand<M>>,
 }
 
-impl<M: proto::SaneMessage> RunningNode<M> {
+impl<M: proto::SanePayload> RunningNode<M> {
     pub async fn wait(self) {
         self.handle.await.unwrap();
     }

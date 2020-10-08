@@ -36,4 +36,4 @@ impl<T> Packet<T> {
     }
 }
 
-pub trait SaneMessage = Send + Sync + Serialize + DeserializeOwned + std::fmt::Debug + 'static;
+pub trait SanePayload = Send + Sync + Serialize + DeserializeOwned + std::fmt::Debug + 'static;
