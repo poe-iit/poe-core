@@ -27,6 +27,7 @@ pub struct Packet<T> {
 }
 
 impl<T> Packet<T> {
+    #[allow(dead_code)]
     pub fn new(op: Operation, payload: Payload<T>) -> Self {
         Self {
             id: Uuid::new_v4(),

@@ -76,11 +76,11 @@ impl<M: proto::SanePayload> Node<M> {
 
         let handle = tokio::spawn(async move {
             // 100 messages
-            let mut seen_msg_ids = LruCache::<Uuid, ()>::new(100);
+            let _seen_msg_ids = LruCache::<Uuid, ()>::new(100);
 
             // send a heartbeat every second
             let mut heartbeat = time::interval(Duration::from_millis(1000));
-            let my_addr =
+            let _my_addr =
                 net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), self.port);
 
             let mut active = true;
@@ -88,7 +88,7 @@ impl<M: proto::SanePayload> Node<M> {
                 let mut new_peers = Vec::<(net::SocketAddr, peer::Peer<M>)>::new();
 
                 {
-                    let mut recvs = self
+                    let recvs = self
                         .peers
                         .iter()
                         .map(|(addr, peer)| Box::pin(Self::recv_from_socket(addr.clone(), peer)))
@@ -104,7 +104,7 @@ impl<M: proto::SanePayload> Node<M> {
                             }
                         }
 
-                        (Ok((addr, payload)), _, _) = futures::future::select_all(recvs) => {
+                        (Ok((_addr, _payload)), _, _) = futures::future::select_all(recvs) => {
 
                         }
                         /*
@@ -182,7 +182,7 @@ impl<M: proto::SanePayload> Node<M> {
 
         for (addr, peer) in &self.peers {
             if let Err(e) = peer.send_packet(&payload).await {
-                errs.push((addr.clone(), e));
+                errs.push((*addr, e));
             }
         }
 
