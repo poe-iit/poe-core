@@ -1,19 +1,18 @@
+use std::{
+    collections::{HashMap, HashSet},
+    io::{self, Write},
+    marker::PhantomData,
+    net,
+    time::Duration,
+};
+
+use lru::LruCache;
+use tokio::{io::AsyncBufReadExt, net::TcpListener, sync::mpsc, time};
+use uuid::Uuid;
+
 mod cli;
 mod peer;
 mod proto;
-use lru::LruCache;
-use std::collections::{HashMap, HashSet};
-use std::io;
-use std::io::Write;
-use std::marker::PhantomData;
-use std::net;
-use std::time::Duration;
-use tokio;
-use tokio::io::AsyncBufReadExt;
-use tokio::net::TcpListener;
-use tokio::sync::mpsc;
-use tokio::time;
-use uuid::Uuid;
 
 struct Node<M> {
     listener: TcpListener,
