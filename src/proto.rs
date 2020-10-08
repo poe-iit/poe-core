@@ -39,4 +39,8 @@ impl<T> Packet<T> {
     }
 }
 
-pub trait SanePayload = Send + Sync + Serialize + DeserializeOwned + std::fmt::Debug + 'static;
+pub trait SanePayload:
+    Send + Sync + Serialize + DeserializeOwned + std::fmt::Debug + 'static
+{
+}
+impl<T: Send + Sync + Serialize + DeserializeOwned + std::fmt::Debug + 'static> SanePayload for T {}

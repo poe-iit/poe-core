@@ -1,5 +1,3 @@
-#![feature(trait_alias)]
-
 mod cli;
 mod peer;
 mod proto;
