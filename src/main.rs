@@ -19,13 +19,13 @@ async fn main() {
         .parse::<u16>()
         .expect("Port is not an integer");
 
-    let mut node: Node<String> = Node::new(port).await;
+    let node: Node<String> = Node::new(port).await;
 
     let peer_strings = matches.value_of("peers").unwrap().split(',');
 
     for s in peer_strings {
         let addr: net::SocketAddr = s.parse().unwrap();
-        node.known_peers.insert(addr);
+        node.known_peers.write().await.insert(addr);
     }
 
     let mut node = node.start();

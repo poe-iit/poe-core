@@ -3,11 +3,16 @@ use std::{
     io,
     marker::PhantomData,
     net,
+    sync::Arc,
     time::Duration,
 };
 
 use lru::LruCache;
-use tokio::{net::TcpListener, sync::mpsc, time};
+use tokio::{
+    net::TcpListener,
+    sync::{mpsc, RwLock},
+    time,
+};
 use uuid::Uuid;
 
 use crate::{peer, proto};
@@ -15,7 +20,7 @@ use crate::{peer, proto};
 pub struct Node<M> {
     listener: TcpListener,
     peers: HashMap<net::SocketAddr, peer::Peer<M>>,
-    pub(super) known_peers: HashSet<net::SocketAddr>,
+    pub(super) known_peers: Arc<RwLock<HashSet<net::SocketAddr>>>,
     port: u16,
 
     phantom: PhantomData<M>,
@@ -94,7 +99,7 @@ impl<M: proto::SanePayload> Node<M> {
                             self.broadcast(proto::Payload::Heartbeat).await;
                         },
                         Ok((stream, addr)) = self.listener.accept() => {
-                            if self.known_peers.contains(&addr) {
+                            if self.known_peers.read().await.contains(&addr) {
                                 new_peers.push((addr, peer::Peer::new(stream)));
                             }
                         }
