@@ -6,11 +6,13 @@ use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum Operation {
-    Broadcast(
-        /* blacklist */ HashSet<net::SocketAddr>,
-        /* hops */ u16,
-    ),
-    Targetted(/* Target */ net::SocketAddr),
+    Broadcast {
+        seen: HashSet<net::SocketAddr>,
+        hops: u16,
+    },
+    Directed {
+        target: net::SocketAddr,
+    },
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
