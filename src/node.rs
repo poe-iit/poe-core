@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     peer,
-    proto::{Payload, SanePayload},
+    proto::{Operation, Packet, Payload, SanePayload},
 };
 
 use lru::LruCache;
@@ -24,8 +24,8 @@ pub struct Node<M> {
     listener: TcpListener,
     peers: HashMap<SocketAddr, peer::Peer<M>>,
     pub(super) known_peers: HashSet<SocketAddr>,
-    inbound_msgs: mpsc::Receiver<Payload<M>>,
-    tx: mpsc::Sender<Payload<M>>,
+    inbound_packets: mpsc::Receiver<Packet<M>>,
+    tx: mpsc::Sender<Packet<M>>,
     #[allow(dead_code)]
     seen_msgs: LruCache<Uuid, ()>,
     phantom: PhantomData<M>,
@@ -42,7 +42,7 @@ impl<M: SanePayload> Node<M> {
             listener,
             peers: Default::default(),
             known_peers: Default::default(),
-            inbound_msgs: rx,
+            inbound_packets: rx,
             seen_msgs: LruCache::new(SEEN_CACHE_CAPACITY),
             tx,
             phantom: PhantomData,
@@ -73,14 +73,19 @@ impl<M: SanePayload> Node<M> {
                         },
                         MetaCommand::Broadcast(msg) => {
                             println!("Told to broadcast '{:?}'", msg);
-                            self.broadcast(Payload::Message(msg)).await;
+                            let payload = Payload::Message(msg);
+                            let op = Operation::Broadcast {
+                                seen: HashSet::new(),
+                                hops: 0, // ???
+                            };
+                            let packet = Packet::new(op, payload);
+                            self.broadcast(packet).await;
                         }
                     }
                 }
-                msg = self.inbound_msgs.recv() => match msg.expect("no senders") {
-                    Payload::Message(_m) => {
-                        todo!("???");
-                    }
+                pkt = self.inbound_packets.recv() => {
+                    let pkt = pkt.expect("no senders???");
+                    todo!("do something with this packet: {:?}", pkt);
                 }
             }
         }
@@ -139,7 +144,7 @@ impl<M: SanePayload> Node<M> {
     */
 
     /// Send a msg to each node in the peer set and returns a set of
-    pub async fn broadcast(&mut self, payload: Payload<M>) -> Vec<(SocketAddr, tokio::io::Error)> {
+    pub async fn broadcast(&mut self, payload: Packet<M>) -> Vec<(SocketAddr, tokio::io::Error)> {
         let mut errs = vec![];
 
         for (addr, peer) in &mut self.peers {
