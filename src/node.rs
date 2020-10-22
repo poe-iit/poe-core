@@ -93,57 +93,48 @@ impl<M: SanePayload> Node<M> {
     }
 
     /*
-    pub fn start(mut self) -> RunningNode<M> {
-        let handle = tokio::spawn(async move {
-            // 100 messages
-            let _seen_msg_ids = LruCache::<Uuid, ()>::new(100);
+        let _my_addr =
+            net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), self.port);
 
-            let _my_addr =
-                net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), self.port);
-
-                tokio::select! {
-                /*
-                (packet, _peer) = self.recv_packet() => {
-                    if seen_msg_ids.contains(&packet.id) {
-                        continue;
-                    }
-                    seen_msg_ids.put(packet.id, ());
-                    // switch over the payload data
-                    match packet.payload {
-                        proto::Payload::Message(m) => {
-                            // what kind of message operation was it?
-                            match packet.op {
-                                proto::Operation::Broadcast(mut seen, hops) => {
-                                    // if I have already seen this message, skip it
-                                    if seen.contains(&my_addr) {
+            tokio::select! {
+            (packet, _peer) = self.recv_packet() => {
+                if seen_msg_ids.contains(&packet.id) {
+                    continue;
+                }
+                seen_msg_ids.put(packet.id, ());
+                // switch over the payload data
+                match packet.payload {
+                    proto::Payload::Message(m) => {
+                        // what kind of message operation was it?
+                        match packet.op {
+                            proto::Operation::Broadcast(mut seen, hops) => {
+                                // if I have already seen this message, skip it
+                                if seen.contains(&my_addr) {
+                                    continue;
+                                }
+                                println!("[{}] got msg {} '{:?}' {} hops", self.port, packet.id, m, hops);
+                                // insert myself into the
+                                seen.insert(my_addr.clone());
+                                let pkt = proto::Packet {
+                                    id: packet.id,
+                                    op: proto::Operation::Broadcast(seen.clone(), hops + 1),
+                                    payload: proto::Payload::Message(m)
+                                };
+                                let encoded = bincode::serialize(&pkt).unwrap();
+                                for peer in self.peers.keys() {
+                                    if seen.contains(peer) {
                                         continue;
                                     }
-                                    println!("[{}] got msg {} '{:?}' {} hops", self.port, packet.id, m, hops);
-                                    // insert myself into the
-                                    seen.insert(my_addr.clone());
-                                    let pkt = proto::Packet {
-                                        id: packet.id,
-                                        op: proto::Operation::Broadcast(seen.clone(), hops + 1),
-                                        payload: proto::Payload::Message(m)
-                                    };
-                                    let encoded = bincode::serialize(&pkt).unwrap();
-                                    for peer in self.peers.keys() {
-                                        if seen.contains(peer) {
-                                            continue;
-                                        }
-                                        self.sock.send_to(&encoded, peer).await.unwrap();
-                                    }
-                                },
-                                proto::Operation::Targetted(_) => {
-                                    println!("Targetted message!");
+                                    self.sock.send_to(&encoded, peer).await.unwrap();
                                 }
+                            },
+                            proto::Operation::Targetted(_) => {
+                                println!("Targetted message!");
                             }
-                        },
-                    }
-                },
-                */
-            }
-        });
+                        }
+                    },
+                }
+            },
     }
     */
 
