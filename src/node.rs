@@ -168,11 +168,11 @@ impl<M: SanePayload> RunningNode<M> {
     }
 
     pub async fn terminate(mut self) {
-        let _ = self.tx.send(MetaCommand::<M>::Die).await;
+        let _ = self.tx.send(MetaCommand::Die).await;
         self.wait().await;
     }
 
     pub async fn broadcast(&mut self, msg: M) {
-        let _ = self.tx.send(MetaCommand::<M>::Broadcast(msg)).await;
+        let _ = self.tx.send(MetaCommand::Broadcast(msg)).await;
     }
 }
