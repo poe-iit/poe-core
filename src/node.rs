@@ -163,7 +163,7 @@ impl<M: SanePayload> RunningNode<M> {
         self.handle.await.unwrap();
     }
 
-    pub async fn terminate(mut self) {
+    pub async fn terminate(self) {
         let _ = self.tx.send(MetaCommand::Die).await;
         self.wait().await;
     }

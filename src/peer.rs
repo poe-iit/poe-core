@@ -54,7 +54,7 @@ impl<M: SanePayload> Receiver<M> {
         Ok(pkt)
     }
 
-    async fn recv_into_chan(mut self, mut tx: mpsc::Sender<Packet<M>>) -> tokio::io::Result<()> {
+    async fn recv_into_chan(mut self, tx: mpsc::Sender<Packet<M>>) -> tokio::io::Result<()> {
         loop {
             let pkt = self.recv_packet().await?;
             if tx.send(pkt).await.is_err() {
