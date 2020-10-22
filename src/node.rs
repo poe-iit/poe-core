@@ -144,16 +144,14 @@ impl<M: SanePayload> Node<M> {
     */
 
     /// Send a msg to each node in the peer set and returns a set of
-    pub async fn broadcast(&mut self, payload: Packet<M>) -> Vec<(SocketAddr, tokio::io::Error)> {
-        let mut errs = vec![];
-
+    pub async fn broadcast(&mut self, payload: Packet<M>) -> HashMap<SocketAddr, tokio::io::Error> {
+        let mut errs = HashMap::new();
         for (addr, peer) in &mut self.peers {
             if let Err(e) = peer.send_packet(&payload).await {
-                errs.push((*addr, e));
+                errs.insert(*addr, e);
             }
         }
-
-        return errs;
+        errs
     }
 }
 
