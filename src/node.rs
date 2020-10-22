@@ -86,36 +86,44 @@ impl<M: SanePayload> Node<M> {
                 }
                 pkt = self.inbound_packets.recv() => {
                     let pkt = pkt.expect("no senders???");
-                    if self.seen_msgs.contains(&pkt.id) {
-                        continue;
-                    }
-                    self.seen_msgs.put(pkt.id, ());
-                    match pkt.payload {
-                        Payload::Message(m) => {
-                            // what kind of message operation was it?
-                            match pkt.op {
-                                #[allow(unreachable_code)]
-                                Operation::Broadcast { mut seen, hops } => {
-                                    // TODO: get a real address and determine it at a higher scope
-                                    let my_addr = SocketAddr::from(([127, 0, 0, 1], self.port));
-                                    // if I have already seen this message, skip it
-                                    if seen.contains(&my_addr) {
-                                        continue;
-                                    }
-                                    println!("[{}] got msg {} '{:?}' {} hops", self.port, pkt.id, m, hops);
-                                    seen.insert(my_addr);
-                                    let new_pkt = Packet {
-                                        id: pkt.id,
-                                        op: Operation::Broadcast { seen, hops: hops + 1 },
-                                        payload: Payload::Message(m)
-                                    };
-                                    self.broadcast(new_pkt).await;
-                                },
-                                Operation::Directed { .. } => {
-                                    todo!("directed message!");
-                                }
-                            }
+                    self.handle_packet(pkt).await;
+                }
+            }
+        }
+    }
+
+    async fn handle_packet(&mut self, pkt: Packet<M>) {
+        if self.seen_msgs.contains(&pkt.id) {
+            return;
+        } else {
+            self.seen_msgs.put(pkt.id, ());
+        }
+
+        match pkt.payload {
+            Payload::Message(m) => {
+                // what kind of message operation was it?
+                match pkt.op {
+                    Operation::Broadcast { mut seen, hops } => {
+                        // TODO: get a real address and determine it earlier
+                        let my_addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+                        // if I have already seen this message, skip it
+                        if seen.contains(&my_addr) {
+                            return;
                         }
+                        println!("[{}] got msg {} '{:?}' {} hops", self.port, pkt.id, m, hops);
+                        seen.insert(my_addr);
+                        let new_pkt = Packet {
+                            id: pkt.id,
+                            op: Operation::Broadcast {
+                                seen,
+                                hops: hops + 1,
+                            },
+                            payload: Payload::Message(m),
+                        };
+                        self.broadcast(new_pkt).await;
+                    }
+                    Operation::Directed { .. } => {
+                        todo!("directed message!");
                     }
                 }
             }
