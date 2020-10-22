@@ -1,4 +1,4 @@
-use std::{io::Write, net};
+use std::io::Write;
 
 use tokio::io::AsyncBufReadExt;
 
@@ -24,7 +24,7 @@ async fn main() {
     let peer_strings = matches.value_of("peers").unwrap().split(',');
 
     for s in peer_strings {
-        let addr: net::SocketAddr = s.parse().unwrap();
+        let addr = s.parse().unwrap();
         node.known_peers.insert(addr);
     }
 
@@ -38,23 +38,21 @@ async fn main() {
             print!(">>> ");
             std::io::stdout().flush().unwrap(); // ugh
             let mut buffer = String::new();
-            if let Ok(_) = reader.read_line(&mut buffer).await {
+            if reader.read_line(&mut buffer).await.is_ok() {
                 let line = buffer.trim();
-                let parts = line.split_ascii_whitespace().collect::<Vec<&str>>();
-                if parts.len() == 0 {
+                let parts = line.split_ascii_whitespace().collect::<Vec<_>>();
+                if parts.is_empty() {
                     continue;
                 }
 
                 match parts[0] {
-                    "exit" => {
-                        break;
-                    }
+                    "exit" => break,
                     "b" => {
                         let msg = parts[1..].join(" ");
                         node.broadcast(msg).await;
                     }
                     _ => println!("Unknown '{}'", line),
-                };
+                }
             } else {
                 break;
             }

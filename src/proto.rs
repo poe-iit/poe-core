@@ -1,18 +1,16 @@
-/// structures and methods for communication over a Peer connection
+use std::{collections::HashSet, fmt::Debug, net::SocketAddr};
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::net;
 use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum Operation {
     Broadcast {
-        seen: HashSet<net::SocketAddr>,
+        seen: HashSet<SocketAddr>,
         hops: u16,
     },
     Directed {
-        target: net::SocketAddr,
+        target: SocketAddr,
     },
 }
 
