@@ -1,42 +1,66 @@
 use std::marker::PhantomData;
-use tokio::sync::Mutex;
+
+use crate::proto::{Payload, SanePayload};
+
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
     net::TcpStream,
+    sync::mpsc,
 };
 
 pub struct Peer<M> {
-    read_stream: Mutex<tokio::io::ReadHalf<TcpStream>>,
-    write_stream: Mutex<tokio::io::WriteHalf<TcpStream>>,
+    stream: WriteHalf<TcpStream>,
     phantom: PhantomData<M>,
 }
 
-impl<M: super::proto::SanePayload> Peer<M> {
-    pub fn new(stream: TcpStream) -> Self {
+impl<M: SanePayload> Peer<M> {
+    pub fn new(stream: TcpStream, tx: mpsc::Sender<Payload<M>>) -> Self {
         let (read, write) = tokio::io::split(stream);
+        let rcvr = Receiver::new(read);
+        tokio::spawn(rcvr.recv_into_chan(tx));
         Self {
-            read_stream: Mutex::new(read),
-            write_stream: Mutex::new(write),
+            stream: write,
             phantom: PhantomData,
         }
     }
 
-    pub async fn recv_packet(&self) -> tokio::io::Result<super::proto::Payload<M>> {
-        let mut stream = self.read_stream.lock().await;
-        let msg_len = stream.read_u64().await?;
+    pub async fn send_packet(&mut self, packet: &Payload<M>) -> tokio::io::Result<()> {
+        let buf = bincode::serialize(&packet).expect("TODO: handle serialization failures");
+        self.stream.write_u64(buf.len() as u64).await?;
+        self.stream.write_all(&buf[..]).await?;
+        self.stream.flush().await?;
+        Ok(())
+    }
+}
+
+struct Receiver<M> {
+    stream: ReadHalf<TcpStream>,
+    phantom: PhantomData<M>,
+}
+
+impl<M: SanePayload> Receiver<M> {
+    fn new(stream: ReadHalf<TcpStream>) -> Self {
+        Self {
+            stream,
+            phantom: PhantomData,
+        }
+    }
+
+    async fn recv_packet(&mut self) -> tokio::io::Result<Payload<M>> {
+        let msg_len = self.stream.read_u64().await?;
         let mut buf = vec![0u8; msg_len as usize];
-        stream.read_exact(&mut buf[..]).await?;
+        self.stream.read_exact(&mut buf[..]).await?;
         let pkt = bincode::deserialize(&buf[..]).expect("TODO: handle invalid packet data");
         Ok(pkt)
     }
 
-    pub async fn send_packet(&self, packet: &super::proto::Payload<M>) -> tokio::io::Result<()> {
-        let mut stream = self.write_stream.lock().await;
-
-        let buf = bincode::serialize(&packet).expect("TODO: handle serialization failures");
-        stream.write_u64(buf.len() as u64).await?;
-        stream.write_all(&buf[..]).await?;
-        stream.flush().await?;
+    async fn recv_into_chan(mut self, mut tx: mpsc::Sender<Payload<M>>) -> tokio::io::Result<()> {
+        loop {
+            let pkt = self.recv_packet().await?;
+            if tx.send(pkt).await.is_err() {
+                break;
+            }
+        }
         Ok(())
     }
 }

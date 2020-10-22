@@ -1,6 +1,7 @@
 /// structures and methods for communication over a Peer connection
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::net;
 use uuid::Uuid;
 
@@ -17,7 +18,6 @@ pub enum Operation {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum Payload<T> {
-    Heartbeat,
     Message(T),
 }
 
@@ -39,8 +39,5 @@ impl<T> Packet<T> {
     }
 }
 
-pub trait SanePayload:
-    Send + Sync + Serialize + DeserializeOwned + std::fmt::Debug + 'static
-{
-}
-impl<T: Send + Sync + Serialize + DeserializeOwned + std::fmt::Debug + 'static> SanePayload for T {}
+pub trait SanePayload: Send + Sync + Serialize + DeserializeOwned + Debug + 'static {}
+impl<T: Send + Sync + Serialize + DeserializeOwned + Debug + 'static> SanePayload for T {}
