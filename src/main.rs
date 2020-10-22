@@ -1,13 +1,12 @@
 use std::io::Write;
 
+use itertools::Itertools;
 use tokio::io::AsyncBufReadExt;
 
 mod cli;
 mod node;
 mod peer;
 mod proto;
-
-use node::Node;
 
 #[tokio::main]
 async fn main() {
@@ -19,7 +18,7 @@ async fn main() {
         .parse::<u16>()
         .expect("Port is not an integer");
 
-    let mut node: Node<String> = Node::new(port).await;
+    let mut node = node::Node::new(port).await;
 
     let peer_strings = matches.value_of("peers").unwrap().split(',');
 
@@ -40,18 +39,20 @@ async fn main() {
             let mut buffer = String::new();
             if reader.read_line(&mut buffer).await.is_ok() {
                 let line = buffer.trim();
-                let parts = line.split_ascii_whitespace().collect::<Vec<_>>();
-                if parts.is_empty() {
-                    continue;
-                }
+                let mut args = line.split_ascii_whitespace();
 
-                match parts[0] {
+                let arg0 = match args.next() {
+                    Some(a) => a,
+                    None => continue,
+                };
+
+                match arg0 {
                     "exit" => break,
-                    "b" => {
-                        let msg = parts[1..].join(" ");
+                    "b" | "broadcast" => {
+                        let msg = args.join(" ");
                         node.broadcast(msg).await;
                     }
-                    _ => println!("Unknown '{}'", line),
+                    _ => println!("Unknown command: '{}'", line),
                 }
             } else {
                 break;
