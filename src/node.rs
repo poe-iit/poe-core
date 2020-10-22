@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    peer,
+    peer::Peer,
     proto::{Operation, Packet, Payload, SanePayload},
 };
 
@@ -22,11 +22,11 @@ const META_CHAN_CAPACITY: usize = 16;
 
 pub struct Node<M> {
     listener: TcpListener,
-    peers: HashMap<SocketAddr, peer::Peer<M>>,
+    port: u16,
+    peers: HashMap<SocketAddr, Peer<M>>,
     pub(super) known_peers: HashSet<SocketAddr>,
     inbound_packets: mpsc::Receiver<Packet<M>>,
     tx: mpsc::Sender<Packet<M>>,
-    #[allow(dead_code)]
     seen_msgs: LruCache<Uuid, ()>,
     phantom: PhantomData<M>,
 }
@@ -40,6 +40,7 @@ impl<M: SanePayload> Node<M> {
         let (tx, rx) = mpsc::channel(MSG_CHAN_CAPACITY);
         Self {
             listener,
+            port,
             peers: Default::default(),
             known_peers: Default::default(),
             inbound_packets: rx,
@@ -51,7 +52,7 @@ impl<M: SanePayload> Node<M> {
 
     fn add_peer(&mut self, stream: TcpStream, addr: SocketAddr) {
         if self.known_peers.contains(&addr) {
-            let peer = peer::Peer::new(stream, self.tx.clone());
+            let peer = Peer::new(stream, self.tx.clone());
             self.peers.insert(addr, peer);
         }
     }
@@ -85,7 +86,37 @@ impl<M: SanePayload> Node<M> {
                 }
                 pkt = self.inbound_packets.recv() => {
                     let pkt = pkt.expect("no senders???");
-                    todo!("do something with this packet: {:?}", pkt);
+                    if self.seen_msgs.contains(&pkt.id) {
+                        continue;
+                    }
+                    self.seen_msgs.put(pkt.id, ());
+                    match pkt.payload {
+                        Payload::Message(m) => {
+                            // what kind of message operation was it?
+                            match pkt.op {
+                                #[allow(unreachable_code)]
+                                Operation::Broadcast { mut seen, hops } => {
+                                    // TODO: get a real address and determine it at a higher scope
+                                    let my_addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+                                    // if I have already seen this message, skip it
+                                    if seen.contains(&my_addr) {
+                                        continue;
+                                    }
+                                    println!("[{}] got msg {} '{:?}' {} hops", self.port, pkt.id, m, hops);
+                                    seen.insert(my_addr);
+                                    let new_pkt = Packet {
+                                        id: pkt.id,
+                                        op: Operation::Broadcast { seen, hops: hops + 1 },
+                                        payload: Payload::Message(m)
+                                    };
+                                    self.broadcast(new_pkt).await;
+                                },
+                                Operation::Directed { .. } => {
+                                    todo!("directed message!");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -96,52 +127,6 @@ impl<M: SanePayload> Node<M> {
         let handle = tokio::spawn(self.run(metarx));
         RunningNode { handle, tx: metatx }
     }
-
-    /*
-        let _my_addr =
-            net::SocketAddr::new(net::IpAddr::V4(net::Ipv4Addr::new(127, 0, 0, 1)), self.port);
-
-            tokio::select! {
-            (packet, _peer) = self.recv_packet() => {
-                if seen_msg_ids.contains(&packet.id) {
-                    continue;
-                }
-                seen_msg_ids.put(packet.id, ());
-                // switch over the payload data
-                match packet.payload {
-                    proto::Payload::Message(m) => {
-                        // what kind of message operation was it?
-                        match packet.op {
-                            proto::Operation::Broadcast(mut seen, hops) => {
-                                // if I have already seen this message, skip it
-                                if seen.contains(&my_addr) {
-                                    continue;
-                                }
-                                println!("[{}] got msg {} '{:?}' {} hops", self.port, packet.id, m, hops);
-                                // insert myself into the
-                                seen.insert(my_addr.clone());
-                                let pkt = proto::Packet {
-                                    id: packet.id,
-                                    op: proto::Operation::Broadcast(seen.clone(), hops + 1),
-                                    payload: proto::Payload::Message(m)
-                                };
-                                let encoded = bincode::serialize(&pkt).unwrap();
-                                for peer in self.peers.keys() {
-                                    if seen.contains(peer) {
-                                        continue;
-                                    }
-                                    self.sock.send_to(&encoded, peer).await.unwrap();
-                                }
-                            },
-                            proto::Operation::Targetted(_) => {
-                                println!("Targetted message!");
-                            }
-                        }
-                    },
-                }
-            },
-    }
-    */
 
     /// Send a msg to each node in the peer set and returns a set of
     pub async fn broadcast(&mut self, payload: Packet<M>) -> HashMap<SocketAddr, tokio::io::Error> {
