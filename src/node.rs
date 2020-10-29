@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
     net::{Ipv4Addr, SocketAddr},
+    sync::Arc,
 };
 
 use crate::{
@@ -14,6 +15,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
 };
+use tokio_rustls::{TlsAcceptor, TlsStream};
 use uuid::Uuid;
 
 const MSG_CHAN_CAPACITY: usize = 128;
@@ -21,6 +23,7 @@ const SEEN_CACHE_CAPACITY: usize = 128;
 const META_CHAN_CAPACITY: usize = 16;
 
 pub struct Node<M> {
+    acceptor: TlsAcceptor,
     listener: TcpListener,
     port: u16,
     peers: HashMap<SocketAddr, Peer<M>>,
@@ -38,8 +41,13 @@ impl<M: SanePayload> Node<M> {
             .await
             .unwrap();
         let (tx, rx) = mpsc::channel(MSG_CHAN_CAPACITY);
+
+        let server_config = rustls::ServerConfig::new(Arc::new(rustls::NoClientAuth));
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+
         Self {
             listener,
+            acceptor,
             port,
             peers: Default::default(),
             known_peers: Default::default(),
@@ -50,7 +58,7 @@ impl<M: SanePayload> Node<M> {
         }
     }
 
-    fn add_peer(&mut self, stream: TcpStream, addr: SocketAddr) {
+    fn add_peer(&mut self, stream: TlsStream<TcpStream>, addr: SocketAddr) {
         if self.known_peers.contains(&addr) {
             let peer = Peer::new(stream, self.tx.clone());
             self.peers.insert(addr, peer);
@@ -62,7 +70,14 @@ impl<M: SanePayload> Node<M> {
             tokio::select! {
                 new_peer = self.listener.accept() => {
                     match new_peer {
-                        Ok((stream, addr)) => self.add_peer(stream, addr),
+                        Ok((stream, addr)) => {
+                            let stream = self.acceptor
+                                .accept(stream)
+                                .await
+                                .expect("TLS handshake failed");
+
+                            self.add_peer(stream.into(), addr);
+                        },
                         Err(e) => panic!("TcpListener::accept failed: {}", e),
                     }
                 }

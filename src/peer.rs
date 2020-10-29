@@ -7,14 +7,15 @@ use tokio::{
     net::TcpStream,
     sync::mpsc,
 };
+use tokio_rustls::TlsStream;
 
 pub struct Peer<M> {
-    stream: WriteHalf<TcpStream>,
+    stream: WriteHalf<TlsStream<TcpStream>>,
     phantom: PhantomData<M>,
 }
 
 impl<M: SanePayload> Peer<M> {
-    pub fn new(stream: TcpStream, tx: mpsc::Sender<Packet<M>>) -> Self {
+    pub fn new(stream: TlsStream<TcpStream>, tx: mpsc::Sender<Packet<M>>) -> Self {
         let (read, write) = tokio::io::split(stream);
         let rcvr = Receiver::new(read);
         tokio::spawn(rcvr.recv_into_chan(tx));
@@ -34,12 +35,12 @@ impl<M: SanePayload> Peer<M> {
 }
 
 struct Receiver<M> {
-    stream: ReadHalf<TcpStream>,
+    stream: ReadHalf<TlsStream<TcpStream>>,
     phantom: PhantomData<M>,
 }
 
 impl<M: SanePayload> Receiver<M> {
-    fn new(stream: ReadHalf<TcpStream>) -> Self {
+    fn new(stream: ReadHalf<TlsStream<TcpStream>>) -> Self {
         Self {
             stream,
             phantom: PhantomData,
