@@ -1,8 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     marker::PhantomData,
-    net::{Ipv4Addr, SocketAddr},
-    sync::Arc,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
 };
 
 use crate::{
@@ -15,7 +14,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
 };
-use tokio_rustls::{TlsAcceptor, TlsStream};
+
 use uuid::Uuid;
 
 const MSG_CHAN_CAPACITY: usize = 128;
@@ -23,11 +22,10 @@ const SEEN_CACHE_CAPACITY: usize = 128;
 const META_CHAN_CAPACITY: usize = 16;
 
 pub struct Node<M> {
-    acceptor: TlsAcceptor,
     listener: TcpListener,
     port: u16,
     peers: HashMap<SocketAddr, Peer<M>>,
-    pub(super) known_peers: HashSet<SocketAddr>,
+    // pub(super) known_peers: HashSet<SocketAddr>,
     inbound_packets: mpsc::Receiver<Packet<M>>,
     tx: mpsc::Sender<Packet<M>>,
     seen_msgs: LruCache<Uuid, ()>,
@@ -42,15 +40,25 @@ impl<M: SanePayload> Node<M> {
             .unwrap();
         let (tx, rx) = mpsc::channel(MSG_CHAN_CAPACITY);
 
-        let server_config = rustls::ServerConfig::new(Arc::new(rustls::NoClientAuth));
-        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        /*
+        // Load public certificate.
+        let certs = load_certs("keys/key.cert").unwrap();
+        // Load private key.
+        let key = load_private_key("keys/key.pkey").unwrap();
+        // Do not use client certificate authentication.
+        let mut cfg = rustls::ServerConfig::new(rustls::NoClientAuth::new());
+        // Select a certificate to use.
+        cfg.set_single_cert(certs, key).unwrap();
+
+        let acceptor = TlsAcceptor::from(Arc::new(cfg));
+        */
 
         Self {
             listener,
-            acceptor,
+            // acceptor,
             port,
             peers: Default::default(),
-            known_peers: Default::default(),
+            // known_peers: Default::default(),
             inbound_packets: rx,
             seen_msgs: LruCache::new(SEEN_CACHE_CAPACITY),
             tx,
@@ -58,11 +66,9 @@ impl<M: SanePayload> Node<M> {
         }
     }
 
-    fn add_peer(&mut self, stream: TlsStream<TcpStream>, addr: SocketAddr) {
-        if self.known_peers.contains(&addr) {
-            let peer = Peer::new(stream, self.tx.clone());
-            self.peers.insert(addr, peer);
-        }
+    fn add_peer(&mut self, stream: TcpStream, addr: SocketAddr) {
+        let peer = Peer::new(stream, self.tx.clone());
+        self.peers.insert(addr, peer);
     }
 
     async fn run(mut self, mut metarx: mpsc::Receiver<MetaCommand<M>>) {
@@ -71,12 +77,8 @@ impl<M: SanePayload> Node<M> {
                 new_peer = self.listener.accept() => {
                     match new_peer {
                         Ok((stream, addr)) => {
-                            let stream = self.acceptor
-                                .accept(stream)
-                                .await
-                                .expect("TLS handshake failed");
-
-                            self.add_peer(stream.into(), addr);
+                            // println!("accept from {}!", addr);
+                            self.add_peer(stream /* .into() */, addr);
                         },
                         Err(e) => panic!("TcpListener::accept failed: {}", e),
                     }
@@ -90,12 +92,20 @@ impl<M: SanePayload> Node<M> {
                         MetaCommand::Broadcast(msg) => {
                             println!("Told to broadcast '{:?}'", msg);
                             let payload = Payload::Message(msg);
+                            let mut seen = HashSet::new();
+                            seen.insert(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), self.port));
+
                             let op = Operation::Broadcast {
-                                seen: HashSet::new(),
+                                seen,
                                 hops: 0, // ???
                             };
+
+
                             let packet = Packet::new(op, payload);
                             self.broadcast(packet).await;
+                        },
+                        MetaCommand::AddPeer(stream, addr) => {
+                            self.add_peer(stream, addr);
                         }
                     }
                 }
@@ -108,6 +118,7 @@ impl<M: SanePayload> Node<M> {
     }
 
     async fn handle_packet(&mut self, pkt: Packet<M>) {
+
         if self.seen_msgs.contains(&pkt.id) {
             return;
         } else {
@@ -163,9 +174,10 @@ impl<M: SanePayload> Node<M> {
     }
 }
 
-enum MetaCommand<M> {
+pub enum MetaCommand<M> {
     Die,
     Broadcast(M),
+    AddPeer(TcpStream, SocketAddr)
 }
 
 pub struct RunningNode<M> {
@@ -186,4 +198,37 @@ impl<M: SanePayload> RunningNode<M> {
     pub async fn broadcast(&mut self, msg: M) {
         let _ = self.tx.send(MetaCommand::Broadcast(msg)).await;
     }
+
+    pub async fn send_cmd(&mut self, cmd: MetaCommand<M>) {
+        let _ = self.tx.send(cmd).await;
+    }
 }
+
+
+
+/*
+// Load public certificate from file.
+fn load_certs(filename: &str) -> io::Result<Vec<rustls::Certificate>> {
+    // Open certificate file.
+    let certfile = fs::File::open(filename)?;
+    let mut reader = io::BufReader::new(certfile);
+
+    // Load and return certificate.
+    Ok(pemfile::certs(&mut reader).unwrap())
+}
+
+// Load private key from file.
+fn load_private_key(filename: &str) -> io::Result<rustls::PrivateKey> {
+    // Open keyfile.
+    let keyfile = fs::File::open(filename)?;
+    let mut reader = io::BufReader::new(keyfile);
+
+    // Load and return a single private key.
+    let keys = pemfile::rsa_private_keys(&mut reader).unwrap();
+    println!("len = {}", keys.len());
+    if keys.len() != 1 {
+        return Err(io::Error::new(io::ErrorKind::Other, "I am afraid"));
+    }
+    Ok(keys[0].clone())
+}
+*/
