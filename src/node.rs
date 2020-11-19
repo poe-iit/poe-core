@@ -71,7 +71,11 @@ impl<M: SanePayload> Node<M> {
         self.peers.insert(addr, peer);
     }
 
-    async fn run(mut self, mut metarx: mpsc::Receiver<MetaCommand<M>>) {
+    async fn run(
+        mut self,
+        mut metarx: mpsc::Receiver<MetaCommand<M>>,
+        datatx: mpsc::Sender<(M, SocketAddr)>,
+    ) {
         loop {
             tokio::select! {
                 new_peer = self.listener.accept() => {
@@ -101,7 +105,8 @@ impl<M: SanePayload> Node<M> {
                             };
 
 
-                            let packet = Packet::new(op, payload);
+                            let my_addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+                            let packet = Packet::new(op, my_addr, payload);
                             self.broadcast(packet).await;
                         },
                         MetaCommand::AddPeer(stream, addr) => {
@@ -111,14 +116,13 @@ impl<M: SanePayload> Node<M> {
                 }
                 pkt = self.inbound_packets.recv() => {
                     let pkt = pkt.expect("no senders???");
-                    self.handle_packet(pkt).await;
+                    self.handle_packet(pkt, &datatx).await;
                 }
             }
         }
     }
 
-    async fn handle_packet(&mut self, pkt: Packet<M>) {
-
+    async fn handle_packet(&mut self, pkt: Packet<M>, datatx: &mpsc::Sender<(M, SocketAddr)>) {
         if self.seen_msgs.contains(&pkt.id) {
             return;
         } else {
@@ -140,11 +144,12 @@ impl<M: SanePayload> Node<M> {
                         seen.insert(my_addr);
                         let new_pkt = Packet {
                             id: pkt.id,
+                            sender: pkt.sender.clone(),
                             op: Operation::Broadcast {
                                 seen,
                                 hops: hops + 1,
                             },
-                            payload: Payload::Message(m),
+                            payload: Payload::Message(m.clone()),
                         };
                         self.broadcast(new_pkt).await;
                     }
@@ -152,14 +157,21 @@ impl<M: SanePayload> Node<M> {
                         todo!("directed message!");
                     }
                 }
+
+                datatx.send((m, pkt.sender)).await.expect("I am afraid");
             }
         }
     }
 
     pub fn start(self) -> RunningNode<M> {
         let (metatx, metarx) = mpsc::channel(META_CHAN_CAPACITY);
-        let handle = tokio::spawn(self.run(metarx));
-        RunningNode { handle, tx: metatx }
+        let (datatx, datarx) = mpsc::channel(MSG_CHAN_CAPACITY);
+        let handle = tokio::spawn(self.run(metarx, datatx));
+        RunningNode {
+            handle,
+            tx: metatx,
+            rx: datarx,
+        }
     }
 
     /// Send a msg to each node in the peer set and returns a set of
@@ -177,12 +189,13 @@ impl<M: SanePayload> Node<M> {
 pub enum MetaCommand<M> {
     Die,
     Broadcast(M),
-    AddPeer(TcpStream, SocketAddr)
+    AddPeer(TcpStream, SocketAddr),
 }
 
 pub struct RunningNode<M> {
     handle: tokio::task::JoinHandle<()>,
     tx: mpsc::Sender<MetaCommand<M>>,
+    rx: mpsc::Receiver<(M, SocketAddr)>,
 }
 
 impl<M: SanePayload> RunningNode<M> {
@@ -202,9 +215,11 @@ impl<M: SanePayload> RunningNode<M> {
     pub async fn send_cmd(&mut self, cmd: MetaCommand<M>) {
         let _ = self.tx.send(cmd).await;
     }
+
+    pub async fn recv(&mut self) -> Option<(M, SocketAddr)> {
+        self.rx.recv().await
+    }
 }
-
-
 
 /*
 // Load public certificate from file.

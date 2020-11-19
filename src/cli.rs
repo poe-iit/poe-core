@@ -1,3 +1,4 @@
+/*
 use clap::{App, Arg};
 
 pub fn build_cli() -> App<'static, 'static> {
@@ -30,3 +31,4 @@ pub fn build_cli() -> App<'static, 'static> {
                 .takes_value(false),
         )
 }
+*/
