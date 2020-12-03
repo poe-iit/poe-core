@@ -8,6 +8,7 @@ mod support;
 
 use imgui::*;
 use rand::prelude::*;
+use regex::Regex;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
@@ -15,13 +16,17 @@ use tokio::sync::broadcast;
 type State = Arc<Mutex<UiState>>;
 type States = Arc<Mutex<HashMap<u16, State>>>;
 
+type Color = [f32; 4];
+
 #[derive(Clone, Debug)]
 enum UiCommand {
     Broadcast(String),
+    ChangeColor(Color),
 }
 
 struct UiState {
     log: Vec<String>,
+    color: Color,
     tx: broadcast::Sender<UiCommand>,
 }
 
@@ -29,6 +34,7 @@ impl UiState {
     pub fn new(tx: broadcast::Sender<UiCommand>) -> Self {
         Self {
             log: Default::default(),
+            color: Default::default(),
             tx,
         }
     }
@@ -62,17 +68,21 @@ async fn spawn_task(port: u16, peer_strings: &[&str], states: States) {
 
     loop {
         tokio::select! {
-            /*
-            _ = node.wait() => {
-                println!("node dead!");
-                break;
-            },
-            */
 
             data_opt = node.recv() => {
                 if let Some(data) = data_opt {
                     let mut state = state.lock().unwrap();
-                    state.log.push(format!("Got: '{:?}'", data));
+                    let re = Regex::new(r"c\((\d*\.?\d*),(\d*\.?\d*),(\d*\.?\d*),(\d*\.?\d*)\)").unwrap();
+                    let captures = re.captures(&data.0);
+                    if let Some(captures) = captures {
+                        let mut newcolor = state.color;
+                        newcolor[0] = captures[1].parse().unwrap();
+                        newcolor[1] = captures[2].parse().unwrap();
+                        newcolor[2] = captures[3].parse().unwrap();
+                        newcolor[3] = captures[4].parse().unwrap();
+                        state.log.push(format!("told to change color to: '{:?}'", newcolor));
+                        state.color = newcolor;
+                    }
                 }
             }
 
@@ -85,47 +95,18 @@ async fn spawn_task(port: u16, peer_strings: &[&str], states: States) {
                             drop(state);
                             node.broadcast(msg).await;
                         }
+                        UiCommand::ChangeColor(newcolor) => {
+                            state.log.push(format!("Changing color to: '{:?}'", newcolor));
+                            node.broadcast(
+                                format!("c({},{},{},{})", newcolor[0], newcolor[1], newcolor[2], newcolor[3])
+                                    .into()).await;
+                            state.color = newcolor;
+                        }
                     }
                 }
             }
         };
     }
-
-    // run the interactive shell if we need to
-
-    /*
-    if shell {
-        let mut reader = tokio::io::BufReader::new(tokio::io::stdin());
-        loop {
-            print!(">>> ");
-            std::io::stdout().flush().unwrap(); // ugh
-            let mut buffer = String::new();
-            if reader.read_line(&mut buffer).await.is_ok() {
-                let line = buffer.trim();
-                let mut args = line.split_ascii_whitespace();
-
-                let arg0 = match args.next() {
-                    Some(a) => a,
-                    None => continue,
-                };
-
-                match arg0 {
-                    "exit" => break,
-                    "b" | "broadcast" => {
-                        let msg = args.join(" ");
-                        node.broadcast(msg).await;
-                    }
-                    _ => println!("Unknown command: '{}'", line),
-                }
-            } else {
-                break;
-            }
-        }
-        node.terminate().await;
-    } else {
-        // otherwise wait for the node to finish
-    }
-    */
 }
 
 #[tokio::main]
@@ -172,25 +153,23 @@ fn main() {
                     [rand.gen::<f32>() * 1024f32, rand.gen::<f32>() * 768f32],
                     Condition::FirstUseEver,
                 )
-                .size([300.0, 400.0], Condition::FirstUseEver)
+                .size([300.0, 240.0], Condition::FirstUseEver)
                 .build(&ui, || {
                     ui.text(format!("Port: {}", port));
                     ui.separator();
 
-                    ui.text_wrapped(im_str!("Here is a thing"));
-
-                    if ui.small_button(im_str!("Broadcast")) {
+                    let mut color = state.lock().unwrap().color;
+                    let ce = ColorEdit::new(im_str!("color_edit"), &mut color);
+                    if ce.build(&ui) {
                         state
                             .lock()
                             .unwrap()
                             .tx
-                            .send(UiCommand::Broadcast(
-                                format!("Fire at node {}", port).into(),
-                            ))
+                            .send(UiCommand::ChangeColor(color))
+                            /*
+                             */
                             .unwrap();
                     }
-
-                    ui.separator();
 
                     ChildWindow::new("console")
                         .size([0.0, 0.0])
@@ -200,16 +179,6 @@ fn main() {
                                 ui.text(format!("{}", event));
                             }
                         });
-
-                    /*
-                    let mut autoscroll = true;
-                    ui.popup(im_str!("Options"), || {
-                        ui.checkbox(im_str!("Auto-scroll"), &mut autoscroll);
-                    });
-                    if ui.small_button(im_str!("Options")) {
-                        ui.open_popup(im_str!("Options"));
-                    }
-                    */
                 });
         }
     });
