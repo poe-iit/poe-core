@@ -20,7 +20,6 @@ type Color = [f32; 4];
 /// Commands sent from the UI to the nodes to ask them to do stuff.
 #[derive(Clone, Debug)]
 enum UiCommand {
-    Broadcast(String),
     ChangeColor(Color),
 }
 
@@ -126,12 +125,11 @@ async fn spawn_task(port: u16, peer_strings: &[&str], states: States) {
 
             /*
              * In this branch of the select, we get events from the UI thread and handle them.
-             * Here, the UI can tell us to do one of two things. Broadcast a message and
-             * ChangeColor to some other color. You can see the other side of this code in the UI
-             * nonsense in main() below. All this does is ask the node to broadcast messages over
-             * the network. Don't really worry about how all this works, it's just a spooky method
-             * to get around rust's ownership model and whatnot. (The ui thread cant broadcast
-             * itself, as this task owns the node mutably)
+             * Here, the UI can tell us to ChangeColor to some other color. You can see the other
+             * side of this code in the UI nonsense in main() below. All this does is ask the node
+             * to broadcast messages over the network. Don't really worry about how all this works,
+             * it's just a spooky method to get around rust's ownership model and whatnot. (The ui
+             * thread cant broadcast itself, as this task owns the node mutably)
              *
              * In a real application (like when you use sensors, screens, lights, etc) you might
              * sit here and poll for events on a raspberry PI's GPIO pins, poking at the network
@@ -145,12 +143,6 @@ async fn spawn_task(port: u16, peer_strings: &[&str], states: States) {
                 if let Ok(cmd) = cmd {
                     let mut state = state.lock().unwrap();
                     match cmd {
-                        /* Just broadcast a string */
-                        UiCommand::Broadcast(msg) => {
-                            state.log.push(format!("Broadcasting: '{:?}'", msg));
-                            drop(state
-                            node.broadcast(msg).await;
-                        }
                         /* Given the color, format it to a string, and broadcast it. */
                         UiCommand::ChangeColor(newcolor) => {
                             state.log.push(format!("Changing color to: '{:?}'", newcolor));
