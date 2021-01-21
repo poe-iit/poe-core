@@ -40,19 +40,6 @@ impl<M: SanePayload> Node<M> {
             .unwrap();
         let (tx, rx) = mpsc::channel(MSG_CHAN_CAPACITY);
 
-        /*
-        // Load public certificate.
-        let certs = load_certs("keys/key.cert").unwrap();
-        // Load private key.
-        let key = load_private_key("keys/key.pkey").unwrap();
-        // Do not use client certificate authentication.
-        let mut cfg = rustls::ServerConfig::new(rustls::NoClientAuth::new());
-        // Select a certificate to use.
-        cfg.set_single_cert(certs, key).unwrap();
-
-        let acceptor = TlsAcceptor::from(Arc::new(cfg));
-        */
-
         Self {
             listener,
             // acceptor,
@@ -220,30 +207,3 @@ impl<M: SanePayload> RunningNode<M> {
         self.rx.recv().await
     }
 }
-
-/*
-// Load public certificate from file.
-fn load_certs(filename: &str) -> io::Result<Vec<rustls::Certificate>> {
-    // Open certificate file.
-    let certfile = fs::File::open(filename)?;
-    let mut reader = io::BufReader::new(certfile);
-
-    // Load and return certificate.
-    Ok(pemfile::certs(&mut reader).unwrap())
-}
-
-// Load private key from file.
-fn load_private_key(filename: &str) -> io::Result<rustls::PrivateKey> {
-    // Open keyfile.
-    let keyfile = fs::File::open(filename)?;
-    let mut reader = io::BufReader::new(keyfile);
-
-    // Load and return a single private key.
-    let keys = pemfile::rsa_private_keys(&mut reader).unwrap();
-    println!("len = {}", keys.len());
-    if keys.len() != 1 {
-        return Err(io::Error::new(io::ErrorKind::Other, "I am afraid"));
-    }
-    Ok(keys[0].clone())
-}
-*/

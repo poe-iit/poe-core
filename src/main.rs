@@ -1,6 +1,5 @@
 #![deny(unused_must_use)]
 
-mod cli;
 mod node;
 mod peer;
 mod proto;
