@@ -131,7 +131,7 @@ impl<M: SanePayload> Node<M> {
                         seen.insert(my_addr);
                         let new_pkt = Packet {
                             id: pkt.id,
-                            sender: pkt.sender.clone(),
+                            sender: pkt.sender,
                             op: Operation::Broadcast {
                                 seen,
                                 hops: hops + 1,

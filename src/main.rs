@@ -1,5 +1,6 @@
 #![deny(unused_must_use)]
 
+#[allow(dead_code)]
 mod node;
 mod peer;
 mod proto;
@@ -147,8 +148,7 @@ async fn spawn_task(port: u16, peer_strings: &[&str], states: States) {
                         UiCommand::ChangeColor(newcolor) => {
                             state.log.push(format!("Changing color to: '{:?}'", newcolor));
                             node.broadcast(
-                                format!("c({},{},{},{})", newcolor[0], newcolor[1], newcolor[2], newcolor[3])
-                                    .into()).await;
+                                format!("c({},{},{},{})", newcolor[0], newcolor[1], newcolor[2], newcolor[3])).await;
                             state.color = newcolor;
                         }
                     }
@@ -250,7 +250,7 @@ fn main() {
                         .border(true)
                         .build(ui, || {
                             for event in state.lock().unwrap().log.iter().rev() {
-                                ui.text(format!("{}", event));
+                                ui.text(event.to_string());
                             }
                         });
                 });
