@@ -8,7 +8,6 @@ use imgui_glium_renderer::Renderer;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
 use std::time::Instant;
 
-
 pub struct System {
     pub event_loop: EventLoop<()>,
     pub display: glium::Display,
@@ -33,7 +32,6 @@ pub fn init(title: &str) -> System {
 
     let mut imgui = Context::create();
     imgui.set_ini_filename(None);
-
 
     let mut platform = WinitPlatform::init(&mut imgui);
     {
